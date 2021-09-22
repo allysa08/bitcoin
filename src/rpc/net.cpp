@@ -150,6 +150,9 @@ static RPCHelpMan getpeerinfo()
                             {
                                 {RPCResult::Type::NUM, "n", "The heights of blocks we're currently asking from this peer"},
                             }},
+                            {RPCResult::Type::BOOL, "addr_relay_enabled", "Whether we participate in address relay with this peer"},
+                            {RPCResult::Type::NUM, "addr_processed", "The total number of addresses processed, excluding those dropped due to rate limiting"},
+                            {RPCResult::Type::NUM, "addr_rate_limited", "The total number of addresses dropped due to rate limiting"},
                             {RPCResult::Type::ARR, "permissions", "Any special permissions that have been granted to this peer",
                             {
                                 {RPCResult::Type::STR, "permission_type", Join(NET_PERMISSIONS_DOC, ",\n") + ".\n"},
@@ -194,7 +197,7 @@ static RPCHelpMan getpeerinfo()
         CNodeStateStats statestats;
         bool fStateStats = peerman.GetNodeStateStats(stats.nodeid, statestats);
         obj.pushKV("id", stats.nodeid);
-        obj.pushKV("addr", stats.addrName);
+        obj.pushKV("addr", stats.m_addr_name);
         if (stats.addrBind.IsValid()) {
             obj.pushKV("addrbind", stats.addrBind.ToString());
         }
@@ -242,6 +245,9 @@ static RPCHelpMan getpeerinfo()
                 heights.push_back(height);
             }
             obj.pushKV("inflight", heights);
+            obj.pushKV("addr_relay_enabled", statestats.m_addr_relay_enabled);
+            obj.pushKV("addr_processed", statestats.m_addr_processed);
+            obj.pushKV("addr_rate_limited", statestats.m_addr_rate_limited);
         }
         UniValue permissions(UniValue::VARR);
         for (const auto& permission : NetPermissions::ToStrings(stats.m_permissionFlags)) {
@@ -337,7 +343,7 @@ static RPCHelpMan addconnection()
         "\nOpen an outbound connection to a specified node. This RPC is for testing only.\n",
         {
             {"address", RPCArg::Type::STR, RPCArg::Optional::NO, "The IP address and port to attempt connecting to."},
-            {"connection_type", RPCArg::Type::STR, RPCArg::Optional::NO, "Type of connection to open, either \"outbound-full-relay\" or \"block-relay-only\"."},
+            {"connection_type", RPCArg::Type::STR, RPCArg::Optional::NO, "Type of connection to open (\"outbound-full-relay\", \"block-relay-only\" or \"addr-fetch\")."},
         },
         RPCResult{
             RPCResult::Type::OBJ, "", "",
@@ -363,6 +369,8 @@ static RPCHelpMan addconnection()
         conn_type = ConnectionType::OUTBOUND_FULL_RELAY;
     } else if (conn_type_in == "block-relay-only") {
         conn_type = ConnectionType::BLOCK_RELAY;
+    } else if (conn_type_in == "addr-fetch") {
+        conn_type = ConnectionType::ADDR_FETCH;
     } else {
         throw JSONRPCError(RPC_INVALID_PARAMETER, self.ToString());
     }
@@ -913,6 +921,7 @@ static RPCHelpMan addpeeraddress()
         {
             {"address", RPCArg::Type::STR, RPCArg::Optional::NO, "The IP address of the peer"},
             {"port", RPCArg::Type::NUM, RPCArg::Optional::NO, "The port of the peer"},
+            {"tried", RPCArg::Type::BOOL, RPCArg::Default{false}, "If true, attempt to add the peer to the tried addresses table"},
         },
         RPCResult{
             RPCResult::Type::OBJ, "", "",
@@ -921,8 +930,8 @@ static RPCHelpMan addpeeraddress()
             },
         },
         RPCExamples{
-            HelpExampleCli("addpeeraddress", "\"1.2.3.4\" 8333")
-    + HelpExampleRpc("addpeeraddress", "\"1.2.3.4\", 8333")
+            HelpExampleCli("addpeeraddress", "\"1.2.3.4\" 8333 true")
+    + HelpExampleRpc("addpeeraddress", "\"1.2.3.4\", 8333, true")
         },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
@@ -933,17 +942,24 @@ static RPCHelpMan addpeeraddress()
 
     const std::string& addr_string{request.params[0].get_str()};
     const uint16_t port{static_cast<uint16_t>(request.params[1].get_int())};
+    const bool tried{request.params[2].isTrue()};
 
     UniValue obj(UniValue::VOBJ);
     CNetAddr net_addr;
     bool success{false};
 
     if (LookupHost(addr_string, net_addr, false)) {
-        CAddress address{CAddress({net_addr, port}, ServiceFlags(NODE_NETWORK | NODE_WITNESS))};
+        CAddress address{{net_addr, port}, ServiceFlags{NODE_NETWORK | NODE_WITNESS}};
         address.nTime = GetAdjustedTime();
         // The source address is set equal to the address. This is equivalent to the peer
         // announcing itself.
-        if (node.addrman->Add(address, address)) success = true;
+        if (node.addrman->Add({address}, address)) {
+            success = true;
+            if (tried) {
+                // Attempt to move the address to the tried addresses table.
+                node.addrman->Good(address);
+            }
+        }
     }
 
     obj.pushKV("success", success);

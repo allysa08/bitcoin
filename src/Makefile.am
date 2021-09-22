@@ -3,7 +3,7 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 # Pattern rule to print variables, e.g. make print-top_srcdir
-print-%:
+print-%: FORCE
 	@echo '$*'='$($*)'
 
 DIST_SUBDIRS = secp256k1 univalue
@@ -145,6 +145,8 @@ BITCOIN_CORE_H = \
   core_memusage.h \
   cuckoocache.h \
   dbwrapper.h \
+  deploymentinfo.h \
+  deploymentstatus.h \
   external_signer.h \
   flatfile.h \
   fs.h \
@@ -266,13 +268,13 @@ BITCOIN_CORE_H = \
   util/tokenpipe.h \
   util/trace.h \
   util/translation.h \
+  util/types.h \
   util/ui_change_type.h \
   util/url.h \
   util/vector.h \
   validation.h \
   validationinterface.h \
   versionbits.h \
-  versionbitsinfo.h \
   wallet/bdb.h \
   wallet/coincontrol.h \
   wallet/coinselection.h \
@@ -328,6 +330,7 @@ libbitcoin_server_a_SOURCES = \
   chain.cpp \
   consensus/tx_verify.cpp \
   dbwrapper.cpp \
+  deploymentstatus.cpp \
   flatfile.cpp \
   httprpc.cpp \
   httpserver.cpp \
@@ -351,6 +354,7 @@ libbitcoin_server_a_SOURCES = \
   node/ui_interface.cpp \
   noui.cpp \
   policy/fees.cpp \
+  policy/packages.cpp \
   policy/rbf.cpp \
   policy/settings.cpp \
   pow.cpp \
@@ -539,11 +543,13 @@ libbitcoin_common_a_SOURCES = \
   compressor.cpp \
   core_read.cpp \
   core_write.cpp \
+  deploymentinfo.cpp \
   external_signer.cpp \
   init/common.cpp \
   key.cpp \
   key_io.cpp \
   merkleblock.cpp \
+  net_types.cpp \
   netaddress.cpp \
   netbase.cpp \
   net_permissions.cpp \
@@ -560,13 +566,12 @@ libbitcoin_common_a_SOURCES = \
   script/sign.cpp \
   script/signingprovider.cpp \
   script/standard.cpp \
-  versionbitsinfo.cpp \
   warnings.cpp \
   $(BITCOIN_CORE_H)
 
 # util: shared between all executables.
 # This library *must* be included to make sure that the glibc
-# backward-compatibility objects and their sanity checks are linked.
+# sanity checks are linked.
 libbitcoin_util_a_CPPFLAGS = $(AM_CPPFLAGS) $(BITCOIN_INCLUDES)
 libbitcoin_util_a_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
 libbitcoin_util_a_SOURCES = \
@@ -612,11 +617,6 @@ libbitcoin_util_a_SOURCES = \
 
 if USE_LIBEVENT
 libbitcoin_util_a_SOURCES += util/url.cpp
-endif
-
-if GLIBC_BACK_COMPAT
-libbitcoin_util_a_SOURCES += compat/glibc_compat.cpp
-AM_LDFLAGS += $(COMPAT_LDFLAGS)
 endif
 
 # cli: shared between bitcoin-cli and bitcoin-qt
@@ -746,10 +746,6 @@ if BUILD_BITCOIN_LIBS
 include_HEADERS = script/bitcoinconsensus.h
 libbitcoinconsensus_la_SOURCES = support/cleanse.cpp $(crypto_libbitcoin_crypto_base_a_SOURCES) $(libbitcoin_consensus_a_SOURCES)
 
-if GLIBC_BACK_COMPAT
-  libbitcoinconsensus_la_SOURCES += compat/glibc_compat.cpp
-endif
-
 libbitcoinconsensus_la_LDFLAGS = $(AM_LDFLAGS) -no-undefined $(RELDFLAGS)
 libbitcoinconsensus_la_LIBADD = $(LIBSECP256K1)
 libbitcoinconsensus_la_CPPFLAGS = $(AM_CPPFLAGS) -I$(builddir)/obj -I$(srcdir)/secp256k1/include -DBUILD_BITCOIN_INTERNAL
@@ -811,23 +807,23 @@ clean-local:
 check-symbols: $(bin_PROGRAMS)
 if TARGET_DARWIN
 	@echo "Checking macOS dynamic libraries..."
-	$(AM_V_at) OTOOL=$(OTOOL) $(PYTHON) $(top_srcdir)/contrib/devtools/symbol-check.py $(bin_PROGRAMS)
+	$(AM_V_at) $(PYTHON) $(top_srcdir)/contrib/devtools/symbol-check.py $(bin_PROGRAMS)
 endif
 
 if TARGET_WINDOWS
 	@echo "Checking Windows dynamic libraries..."
-	$(AM_V_at) OBJDUMP=$(OBJDUMP) $(PYTHON) $(top_srcdir)/contrib/devtools/symbol-check.py $(bin_PROGRAMS)
+	$(AM_V_at) $(PYTHON) $(top_srcdir)/contrib/devtools/symbol-check.py $(bin_PROGRAMS)
 endif
 
-if GLIBC_BACK_COMPAT
+if TARGET_LINUX
 	@echo "Checking glibc back compat..."
-	$(AM_V_at) CPPFILT=$(CPPFILT) $(PYTHON) $(top_srcdir)/contrib/devtools/symbol-check.py $(bin_PROGRAMS)
+	$(AM_V_at) CPPFILT='$(CPPFILT)' $(PYTHON) $(top_srcdir)/contrib/devtools/symbol-check.py $(bin_PROGRAMS)
 endif
 
 check-security: $(bin_PROGRAMS)
 if HARDEN
 	@echo "Checking binary security..."
-	$(AM_V_at) OBJDUMP=$(OBJDUMP) OTOOL=$(OTOOL) $(PYTHON) $(top_srcdir)/contrib/devtools/security-check.py $(bin_PROGRAMS)
+	$(AM_V_at) $(PYTHON) $(top_srcdir)/contrib/devtools/security-check.py $(bin_PROGRAMS)
 endif
 
 libbitcoin_ipc_mpgen_input = \
@@ -839,9 +835,11 @@ EXTRA_DIST += $(libbitcoin_ipc_mpgen_input)
 if BUILD_MULTIPROCESS
 LIBBITCOIN_IPC=libbitcoin_ipc.a
 libbitcoin_ipc_a_SOURCES = \
+  ipc/capnp/context.h \
   ipc/capnp/init-types.h \
   ipc/capnp/protocol.cpp \
   ipc/capnp/protocol.h \
+  ipc/context.h \
   ipc/exception.h \
   ipc/interfaces.cpp \
   ipc/process.cpp \

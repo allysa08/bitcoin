@@ -6,12 +6,12 @@
 #define BITCOIN_INDEX_BASE_H
 
 #include <dbwrapper.h>
-#include <primitives/block.h>
-#include <primitives/transaction.h>
 #include <threadinterrupt.h>
 #include <validationinterface.h>
 
+class CBlock;
 class CBlockIndex;
+class CChainState;
 
 struct IndexSummary {
     std::string name;
@@ -75,8 +75,9 @@ private:
     /// to a chain reorganization), the index must halt until Commit succeeds or else it could end up
     /// getting corrupted.
     bool Commit();
-
 protected:
+    CChainState* m_chainstate{nullptr};
+
     void BlockConnected(const std::shared_ptr<const CBlock>& block, const CBlockIndex* pindex) override;
 
     void ChainStateFlushed(const CBlockLocator& locator) override;
@@ -117,7 +118,7 @@ public:
 
     /// Start initializes the sync state and registers the instance as a
     /// ValidationInterface so that it stays in sync with blockchain updates.
-    [[nodiscard]] bool Start();
+    [[nodiscard]] bool Start(CChainState& active_chainstate);
 
     /// Stops the instance from staying in sync with blockchain updates.
     void Stop();

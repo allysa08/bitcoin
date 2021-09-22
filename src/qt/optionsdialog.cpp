@@ -92,6 +92,11 @@ OptionsDialog::OptionsDialog(QWidget *parent, bool enableWallet) :
         ui->thirdPartyTxUrls->setVisible(false);
     }
 
+#ifndef ENABLE_EXTERNAL_SIGNER
+    //: "External signing" means using devices such as hardware wallets.
+    ui->externalSignerPath->setToolTip(tr("Compiled without external signing support (required for external signing)"));
+    ui->externalSignerPath->setEnabled(false);
+#endif
     /* Display elements init */
     QDir translations(":translations");
 
@@ -199,6 +204,7 @@ void OptionsDialog::setModel(OptionsModel *_model)
     connect(ui->prune, &QCheckBox::clicked, this, &OptionsDialog::togglePruneWarning);
     connect(ui->pruneSize, qOverload<int>(&QSpinBox::valueChanged), this, &OptionsDialog::showRestartWarning);
     connect(ui->databaseCache, qOverload<int>(&QSpinBox::valueChanged), this, &OptionsDialog::showRestartWarning);
+    connect(ui->externalSignerPath, &QLineEdit::textChanged, [this]{ showRestartWarning(); });
     connect(ui->threadsScriptVerif, qOverload<int>(&QSpinBox::valueChanged), this, &OptionsDialog::showRestartWarning);
     /* Wallet */
     connect(ui->spendZeroConfChange, &QCheckBox::clicked, this, &OptionsDialog::showRestartWarning);
@@ -233,6 +239,8 @@ void OptionsDialog::setMapper()
     /* Wallet */
     mapper->addMapping(ui->spendZeroConfChange, OptionsModel::SpendZeroConfChange);
     mapper->addMapping(ui->coinControlFeatures, OptionsModel::CoinControlFeatures);
+    mapper->addMapping(ui->subFeeFromAmount, OptionsModel::SubFeeFromAmount);
+    mapper->addMapping(ui->externalSignerPath, OptionsModel::ExternalSignerPath);
 
     /* Network */
     mapper->addMapping(ui->mapPortUpnp, OptionsModel::MapPortUPnP);
@@ -288,10 +296,22 @@ void OptionsDialog::on_resetButton_clicked()
 
 void OptionsDialog::on_openBitcoinConfButton_clicked()
 {
-    /* explain the purpose of the config file */
-    QMessageBox::information(this, tr("Configuration options"),
-        tr("The configuration file is used to specify advanced user options which override GUI settings. "
-           "Additionally, any command-line options will override this configuration file."));
+    QMessageBox config_msgbox(this);
+    config_msgbox.setIcon(QMessageBox::Information);
+    //: Window title text of pop-up box that allows opening up of configuration file.
+    config_msgbox.setWindowTitle(tr("Configuration options"));
+    /*: Explanatory text about the priority order of instructions considered by client.
+        The order from high to low being: command-line, configuration file, GUI settings. */
+    config_msgbox.setText(tr("The configuration file is used to specify advanced user options which override GUI settings. "
+                             "Additionally, any command-line options will override this configuration file."));
+
+    QPushButton* open_button = config_msgbox.addButton(tr("Continue"), QMessageBox::ActionRole);
+    config_msgbox.addButton(tr("Cancel"), QMessageBox::RejectRole);
+    open_button->setDefault(true);
+
+    config_msgbox.exec();
+
+    if (config_msgbox.clickedButton() != open_button) return;
 
     /* show an error if there was some problem opening the file */
     if (!GUIUtil::openBitcoinConf())
